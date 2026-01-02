@@ -1,7 +1,7 @@
 # Windows（VS2022）下编译 Protobuf 33.2.0（DLL）踩坑全记录
 
-> **关键词**：Protobuf 33.2.0 / Windows / VS2022 / DLL / map / absl / vcpkg  
-> **适用人群**：Windows 下使用 C++ / VS 集成 protobuf 的开发者  
+> **关键词**：Protobuf 33.2.0 / Windows11 / VS2022 / DLL / map / absl / vcpkg  
+> **适用人群**：Windows11 下使用 C++ / VS 集成 protobuf 的开发者  
 > **结论先行**：Protobuf 33.x + `map<>` = **必须正确引入并运行期匹配 Abseil**
 
 ---
@@ -13,22 +13,71 @@
 - Protobuf 版本：**3.3.2（33.2.0）**
 - 使用方式：
   - protobuf：源码编译，生成 **DLL**
-  - 依赖库（zlib / abseil）：vcpkg
+  - 依赖库（zlib / Abseil）：vcpkg
 - 使用场景：
   - VS C++ 项目
   - `.proto` 中包含 `map<string, int32>` 字段
 
 ---
+## 二、编译前准备
+参考官方编译方式：[cmake/README.md](https://github.com/protocolbuffers/protobuf/blob/main/cmake/README.md)
 
-## 二、最初的 CMake 编译命令
-
+- cmake3.22 and later
+- Git
+- Abseil
+- zlib
+  
+Windows下通过vcpkg安装依赖库，若本机未安装vcpkg，则按如下方式安装：
 ```bat
+git clone https://github.com/microsoft/vcpkg.git
+cd vcpkg
+bootstrap-vcpkg.bat
+```
+### 安装zlib
+```
+vcpkg install zlib:x64-windows
+```
+### 安装 abseil（动态库）
+```
+vcpkg install abseil:x64-windows
+```
+
+- 默认使用 `/MD`
+- 自动生成 `.lib + .dll`
+
+---
+
+## 三、编译过程
+### 获取源码
+  ```
+  //下载33.2版本源码
+  [latest_protobuf](https://github.com/protocolbuffers/protobuf/releases/latest)
+  ```
+
+### 完整步骤
+```
 cmake -S . -B build ^
+  -A x64 ^
+  -DCMAKE_TOOLCHAIN_FILE=D:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
   -DCMAKE_INSTALL_PREFIX=../install ^
   -Dprotobuf_BUILD_SHARED_LIBS=ON ^
+  -Dprotobuf_BUILD_TESTS=OFF ^
+  -Dprotobuf_WITH_ZLIB=ON ^
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
   -DCMAKE_CXX_STANDARD=17 ^
-  -G "Visual Studio 17 2022"
+  -G "Visual Studio 17 2022" ^
+  -DCMAKE_CXX_FLAGS="/wd4996"
 ```
+编译
+```
+cmake --build build --config Release
+```
+安装
+```
+cmake --install build --config Release
+```
+✔ protobuf 自动找到 absl  
+✔ `map<>` 编译通过
 
 ### 参数说明
 
@@ -42,38 +91,32 @@ cmake -S . -B build ^
 
 ---
 
-## 三、问题一：找不到 ZLIB
+## 四、问题
+### 问题一：找不到 ZLIB
 
-### 报错信息
-
+报错信息
 ```text
 Could NOT find ZLIB (missing: ZLIB_LIBRARY ZLIB_INCLUDE_DIR)
 ```
 
-### 原因分析
-
+#### 原因分析
 - Windows 系统默认 **没有 zlib**
 - protobuf 在 Windows 下依赖 zlib
 
-### 解决方案：使用 vcpkg 安装 zlib
-
-```bat
-git clone https://github.com/microsoft/vcpkg.git
-cd vcpkg
-bootstrap-vcpkg.bat
+#### 解决方案：使用 vcpkg 安装 zlib
+通过vcpkg安装zlib:
+```
 vcpkg install zlib:x64-windows
 ```
 
----
+### 问题二：加入 map 字段后异常
 
-## 四、问题二：加入 map 字段后异常
-
-### 现象
+#### 现象
 
 - `.proto` **不包含 map** → 正常运行
 - `.proto` **包含 map<string, int32>** → 编译或链接失败
 
-### 常见报错
+#### 常见报错
 
 ```text
 error C4996: google::protobuf::RepeatedPtrField ...
@@ -85,9 +128,7 @@ error C4996: google::protobuf::RepeatedPtrField ...
 LNK2001: unresolved external symbol absl::hash_internal::MixingHashState
 ```
 
----
-
-## 五、根本原因：Protobuf 33.x 强依赖 Abseil
+#### 根本原因：Protobuf 33.x 强依赖 Abseil
 
 从 **Protobuf 33.x 开始**：
 
@@ -96,9 +137,8 @@ LNK2001: unresolved external symbol absl::hash_internal::MixingHashState
 - 只有 absl 头文件 ❌ 不够
 - **必须链接 absl 的 lib / dll**
 
----
 
-## 六、一个常见误区：Abseil 不是 header-only
+#### 常见误区：Abseil 不是 header-only
 
 ❌ 错误理解：
 
@@ -110,63 +150,36 @@ LNK2001: unresolved external symbol absl::hash_internal::MixingHashState
 - 需要编译生成 `.lib / .dll`
 - 否则一定会在 `map<>` 处链接失败
 
----
+#### 推荐方案：vcpkg 管理 Abseil
 
-## 七、推荐方案：vcpkg 管理 Abseil
+1️⃣ 安装 abseil（动态库）
 
-### 1️⃣ 安装 abseil（动态库）
-
-```bat
+```
 vcpkg install abseil:x64-windows
 ```
 
 - 默认使用 `/MD`
 - 自动生成 `.lib + .dll`
 
----
 
-### 2️⃣ 使用 vcpkg toolchain 编译 protobuf
+2️⃣ 使用 vcpkg toolchain 编译 protobuf
 
-```
-cmake -S . -B build ^
-  -A x64 ^
-  -G "Visual Studio 17 2022" ^
-  -DCMAKE_TOOLCHAIN_FILE=D:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
-  -DCMAKE_INSTALL_PREFIX=../install ^
-  -DCMAKE_CXX_STANDARD=17 ^
-  -Dprotobuf_BUILD_SHARED_LIBS=ON ^
-  -Dprotobuf_BUILD_TESTS=OFF ^
-  -Dprotobuf_WITH_ZLIB=ON ^
-  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
-  -DCMAKE_CXX_FLAGS="/wd4996"
-```
-编译
-```bat
-cmake --build build --config Release
-```
-安装
-```
-cmake --install build --config Release
-```
-✔ protobuf 自动找到 absl  
-✔ `map<>` 编译通过
+编译命令同上。
 
----
+### 问题三：C4996（MSVC 警告当错误）
 
-## 八、问题三：C4996（MSVC 警告当错误）
-
-### 报错示例
+#### 报错示例
 
 ```text
 error C4996: 'RepeatedPtrField': Use Arena::Create instead
 ```
 
-### 原因
+#### 原因
 
 - protobuf 33.x 在 MSVC 下存在 **已知 C4996 警告**
 - VS 项目启用了 `/WX`（警告视为错误）
 
-### 解决方式（推荐）
+#### 解决方式（推荐）
 
 ```cpp
 #define _SILENCE_CXX17_ALLOCATOR_VOID_DEPRECATION_WARNING
@@ -183,24 +196,22 @@ error C4996: 'RepeatedPtrField': Use Arena::Create instead
 
 ---
 
-## 九、问题四：运行时报“无法定位程序输入点”
+### 问题四：运行时报“无法定位程序输入点”
 
-### 报错示例
+#### 报错示例
 
 ```text
 无法定位程序输入点
 ?combine_raw@MixingHashState@hash_internal@lts_20250814@absl@@
 ```
 
-### 特点
+#### 特点
 
 - 编译、链接均成功
 - 启动 exe 直接失败
 - 报错符号包含 `absl::lts_YYYYMMDD`
 
----
-
-## 十、问题本质：Abseil ABI 不兼容
+#### 问题本质：Abseil ABI 不兼容
 
 Abseil 的特点：
 
@@ -212,17 +223,15 @@ absl::lts_20250814
 absl::lts_20250512
 ```
 
-### 出错原因
+#### 出错原因
 
 - 编译期链接的是 **A 版本 absl**
 - 运行期加载的是 **B 版本 absl**
 - Windows DLL 搜索顺序导致加载了“错误版本”
 
----
+#### 最终解决方案（强烈推荐）
 
-## 十一、最终解决方案（强烈推荐）
-
-### ✅ 所有 DLL 放到 exe 同目录
+✅ 所有 DLL 放到 exe 同目录
 
 ```text
 ProtoBufDemo.exe
@@ -246,7 +255,7 @@ Windows DLL 搜索顺序：
 
 ---
 
-## 十二、运行库必须统一
+#### 运行库必须统一
 
 | 模块 | 运行库 |
 |----|----|
@@ -258,7 +267,7 @@ Windows DLL 搜索顺序：
 
 ---
 
-## 十三、最终经验总结
+## 五、最终经验总结
 
 - Protobuf 33.x + `map<>` = **必须 Abseil**
 - Abseil 在 Windows 下：
@@ -270,11 +279,10 @@ Windows DLL 搜索顺序：
 
 ---
 
-## 十四、建议
+## 六、建议
 
 > 如果不是强制 DLL，  
 > **优先考虑静态编译 protobuf + absl**，可彻底规避 ABI / DLL 地狱。
-
 ---
 
 **踩坑一次，受益终身。**  
